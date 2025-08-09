@@ -61,6 +61,13 @@ jobs:
             echo "lib_deps ="
             echo "  \${env:${BASE_ENV}.lib_deps}"
           } >> platformio.ini
+          
+      - name: Create shim sdkconfig.h (fallback)
+        run: |
+          set -euxo pipefail
+          cd "$(cat /tmp/WLED_DIR)"
+          mkdir -p include
+          printf '#pragma once\n' > include/sdkconfig.h
 
       - name: Build firmware (custom_wroom)
         run: |
