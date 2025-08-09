@@ -33,7 +33,6 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$(cat /tmp/WLED_DIR)"
-          # Prefer MoonModules' 4MB env if present, fall back to esp32dev if not.
           if grep -q "^\[env:esp32_4MB_max\]" platformio.ini; then
             echo "BASE_ENV=esp32_4MB_max" >> $GITHUB_OUTPUT
           elif grep -q "^\[env:esp32dev\]" platformio.ini; then
@@ -42,18 +41,23 @@ jobs:
             echo "Could not find a suitable base env in platformio.ini"; exit 1
           fi
 
-      - name: Add custom env for WROOM build
+      - name: Add custom env for WROOM build (adds sdkconfig include paths)
         run: |
           set -euxo pipefail
           cd "$(cat /tmp/WLED_DIR)"
           BASE_ENV="${{ steps.envpick.outputs.BASE_ENV }}"
+
+          # PlatformIO resolves ${platformio.packages_dir} to ~/.platformio/packages
+          # Arduino-ESP32 places sdkconfig.h under tools/sdk/esp32/include/config
+          SDKCFG_INC_1='-I${platformio.packages_dir}/framework-arduinoespressif32/tools/sdk/esp32/include'
+          SDKCFG_INC_2='-I${platformio.packages_dir}/framework-arduinoespressif32/tools/sdk/esp32/include/config'
+
           {
             echo ""
             echo "[env:custom_wroom]"
             echo "extends = env:${BASE_ENV}"
-            # Keep MM defaults, add only minimal overrides you actually need.
-            # Example LED pin override; change or drop if not needed:
-            echo "build_flags = \${env:${BASE_ENV}.build_flags} -D LEDPIN=16"
+            # Minimal overrides only; tweak LEDPIN if you want:
+            echo "build_flags = \${env:${BASE_ENV}.build_flags} -D LEDPIN=16 ${SDKCFG_INC_1} ${SDKCFG_INC_2}"
             echo "lib_deps ="
             echo "  \${env:${BASE_ENV}.lib_deps}"
           } >> platformio.ini
@@ -63,7 +67,6 @@ jobs:
           set -euxo pipefail
           cd "$(cat /tmp/WLED_DIR)"
           pio run -e custom_wroom
-          # Prefer WLED's export layout if present, fallback to pio default
           BIN=$(ls build_output/firmware/custom_wroom*.bin 2>/dev/null || true)
           if [ -z "$BIN" ]; then BIN=.pio/build/custom_wroom/firmware.bin; fi
           cp "$BIN" "$GITHUB_WORKSPACE/WLED-MM_custom_wroom.bin"
@@ -73,4 +76,3 @@ jobs:
         with:
           name: WLED-MM_custom_wroom
           path: WLED-MM_custom_wroom.bin
-
