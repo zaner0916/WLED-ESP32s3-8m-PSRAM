@@ -1,85 +1,57 @@
 name: WLED-MM compile (ESP32-WROOM)
 
 on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
+    workflow_dispatch:
 
 jobs:
   build:
+
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.9
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install PlatformIO
-        run: |
-          python -m pip install --upgrade pip
-          pip install --upgrade platformio
-
-      - name: Fetch MoonModules WLED (mdev)
-        run: |
-          set -euxo pipefail
-          git clone --depth 1 --branch mdev https://github.com/MoonModules/WLED-MM.git /tmp/WLED-MM
-          echo "/tmp/WLED-MM" > /tmp/WLED_DIR
-
-      - name: Pick base env for ESP32-WROOM (4MB)
-        id: envpick
-        run: |
-          set -euxo pipefail
-          cd "$(cat /tmp/WLED_DIR)"
-          if grep -q "^\[env:esp32_4MB_max\]" platformio.ini; then
-            echo "BASE_ENV=esp32_4MB_max" >> $GITHUB_OUTPUT
-          elif grep -q "^\[env:esp32dev\]" platformio.ini; then
-            echo "BASE_ENV=esp32dev" >> $GITHUB_OUTPUT
-          else
-            echo "Could not find a suitable base env in platformio.ini"; exit 1
-          fi
-
-      - name: Add custom env for WROOM build (adds sdkconfig include paths)
-        run: |
-          set -euxo pipefail
-          cd "$(cat /tmp/WLED_DIR)"
-          BASE_ENV="${{ steps.envpick.outputs.BASE_ENV }}"
-
-          # PlatformIO resolves ${platformio.packages_dir} to ~/.platformio/packages
-          # Arduino-ESP32 places sdkconfig.h under tools/sdk/esp32/include/config
-          SDKCFG_INC_1='-I${platformio.packages_dir}/framework-arduinoespressif32/tools/sdk/esp32/include'
-          SDKCFG_INC_2='-I${platformio.packages_dir}/framework-arduinoespressif32/tools/sdk/esp32/include/config'
-
-          {
-            echo ""
-            echo "[env:custom_wroom]"
-            echo "extends = env:${BASE_ENV}"
-            # Minimal overrides only; tweak LEDPIN if you want:
-            echo "build_flags = \${env:${BASE_ENV}.build_flags} -D LEDPIN=16 ${SDKCFG_INC_1} ${SDKCFG_INC_2}"
-            echo "lib_deps ="
-            echo "  \${env:${BASE_ENV}.lib_deps}"
-          } >> platformio.ini
-          
-      - name: Create shim sdkconfig.h (fallback)
-        run: |
-          set -euxo pipefail
-          cd "$(cat /tmp/WLED_DIR)"
-          mkdir -p include
-          printf '#pragma once\n' > include/sdkconfig.h
-
-      - name: Build firmware (custom_wroom)
-        run: |
-          set -euxo pipefail
-          cd "$(cat /tmp/WLED_DIR)"
-          pio run -e custom_wroom
-          BIN=$(ls build_output/firmware/custom_wroom*.bin 2>/dev/null || true)
-          if [ -z "$BIN" ]; then BIN=.pio/build/custom_wroom/firmware.bin; fi
-          cp "$BIN" "$GITHUB_WORKSPACE/WLED-MM_custom_wroom.bin"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: WLED-MM_custom_wroom
-          path: WLED-MM_custom_wroom.bin
+    - name: Install PlatformIO
+      run: |
+        python -m pip install --upgrade pip
+        pip install --upgrade platformio
+    - name: Run PlatformIO
+      run: |
+        rm -rf /tmp/WLEDtemp/* || true
+        mkdir -p /tmp/WLEDtemp
+        wget https://github.com/moonmodules/WLED/archive/refs/heads/mdev.zip -O /tmp/WLEDtemp/mm.zip
+        unzip /tmp/WLEDtemp/mm.zip -d /tmp/WLEDtemp
+        find /tmp/WLEDtemp -maxdepth 1 -mindepth 1 -name "*" -type d >> /tmp/WLEDtemp/wledfoldername
+        cd `cat /tmp/WLEDtemp/wledfoldername`
+        cp $GITHUB_WORKSPACE/sdkconfig.h .
+        echo '[env:custom_build]' >>platformio.ini
+        echo 'extends = env:esp32s3dev_8MB_PSRAM' >>platformio.ini
+        echo 'build_flags = ${env:esp32s3dev_8MB_PSRAM.build_flags} -D WLED_DISABLE_BROWNOUT_DET -D LEDPIN=16 -D USERMOD_DHT -D USERMOD_DHT_CELSIUS -D USERMOD_FOUR_LINE_DISPLAY -D USERMOD_PING_PONG_CLOCK -D USERMOD_WORDCLOCK -D USERMOD_ANALOG_CLOCK' >>platformio.ini
+        echo 'extends = env:esp32dev' >>platformio.ini
+        echo 'build_flags = ${env:esp32dev.build_flags} -I. -D WLED_DISABLE_BROWNOUT_DET -D LEDPIN=16 -D USERMOD_DHT -D USERMOD_DHT_CELSIUS -D USERMOD_FOUR_LINE_DISPLAY -D USERMOD_PING_PONG_CLOCK -D USERMOD_WORDCLOCK -D USERMOD_ANALOG_CLOCK' >>platformio.ini
+        echo 'lib_deps = ' >>platformio.ini
+        echo '  ${env:esp32s3dev_8MB_PSRAM.lib_deps}' >>platformio.ini
+        echo '  ${env:esp32dev.lib_deps}' >>platformio.ini
+        echo '  https://github.com/alwynallan/DHT_nonblocking' >>platformio.ini
+        echo '  olikraus/U8g2 @ ^2.28.8' >>platformio.ini
+        
+        pio run -e custom_build || pio run -e custom_build
+    - name: Copy Files
+      run: |
+        cd $GITHUB_WORKSPACE
+        git rm -r $GITHUB_WORKSPACE/*.bin || true
+        WLEDFOLDERNAME=`cat /tmp/WLEDtemp/wledfoldername`
+        cp ${WLEDFOLDERNAME}/build_output/firmware/custom_build.bin $GITHUB_WORKSPACE/
+        date -I | tr -d '\n' >$GITHUB_WORKSPACE/last_update_date.txt
+    - name: Commit Files
+      run: |
+        cd $GITHUB_WORKSPACE
+        git config user.name "GitHub Actions Bot"
+        git config user.email "<>"
+        git add $GITHUB_WORKSPACE/custom_build.bin
+        git add $GITHUB_WORKSPACE/last_update_date.txt
+        git commit -m "Commit Custom Build"
+        git push origin main
